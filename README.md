@@ -62,6 +62,8 @@ For a loopback registry, add `--insecure-http`. Add `--no-cleanup` only when you
 
 `regpush` exits nonzero when Docker cannot find the image, authentication fails, a chunk response has an invalid range, retries are exhausted, a blob is incomplete, or the registry rejects the manifest. Network operations, Docker commands, retries, concurrency, archive entries, and temporary bytes have fixed bounds. Advanced bounds can be configured through the documented `REGPUSH_*` environment variables.
 
+Progress logs cover image preparation, layer compression, registry checks, every acknowledged upload chunk, manifest publication, and cleanup. The output uses durable log lines instead of an animated terminal-only progress bar, so GitHub Actions retains the complete history.
+
 Advanced environment limits are `REGPUSH_MAX_RETRIES` from 1 to 5, `REGPUSH_MAX_TEMP_BYTES` up to 1 TiB, `REGPUSH_PROCESS_TIMEOUT_MS` up to 30 minutes, and `REGPUSH_REQUEST_TIMEOUT_MS` up to 5 minutes. Defaults are 3 retries, 20 GiB of temporary storage, a 10-minute Docker timeout, and a 60-second network timeout.
 
 By default, the saved image tar, extracted image, compressed layers, and incomplete files are removed on success and failure. `cleanup: false` or `--no-cleanup` explicitly retains completed artifacts; incomplete `.part` files are still removed.

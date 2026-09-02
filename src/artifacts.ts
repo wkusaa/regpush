@@ -27,10 +27,23 @@ export type ImageArtifacts = {
   layers: BlobArtifact[];
 };
 
+export type ArtifactPreparationProgress =
+  | {
+      phase: "compressing";
+      totalLayers: number;
+    }
+  | {
+      layer: number;
+      phase: "layer-compressed";
+      size: number;
+      totalLayers: number;
+    };
+
 export type PrepareImageArtifactsOptions = {
   docker: DockerClient;
   image: string;
   maxTemporaryBytes: number;
+  onProgress?: ((progress: ArtifactPreparationProgress) => void) | undefined;
   workspace: ImageWorkspace;
 };
 
@@ -179,6 +192,11 @@ export async function prepareImageArtifacts(
   if (manifest.Layers.some((layer) => typeof layer !== "string")) {
     throw new Error("Docker save manifest contains a malformed layer path");
   }
+  const layerPaths = manifest.Layers;
+  options.onProgress?.({
+    phase: "compressing",
+    totalLayers: layerPaths.length,
+  });
 
   const configPath = safeExtractedPath(
     options.workspace.extractedDirectory,
@@ -198,7 +216,7 @@ export async function prepareImageArtifacts(
       throw new Error("Compressed layers exceed the temporary storage limit");
   };
   const layers = await mapConcurrent(
-    manifest.Layers,
+    layerPaths,
     COMPRESSION_CONCURRENCY,
     async (layer, index) => {
       const layerPath = safeExtractedPath(
@@ -209,7 +227,14 @@ export async function prepareImageArtifacts(
         options.workspace.cacheDirectory,
         `layer-${index}.tar.gz`,
       );
-      return compressLayer(layerPath, outputPath, reserveBytes);
+      const artifact = await compressLayer(layerPath, outputPath, reserveBytes);
+      options.onProgress?.({
+        layer: index + 1,
+        phase: "layer-compressed",
+        size: artifact.size,
+        totalLayers: layerPaths.length,
+      });
+      return artifact;
     },
   );
 

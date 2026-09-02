@@ -72,10 +72,12 @@ describe("Docker image artifacts", () => {
         cleanup: true,
         imageId: resolvedId,
       });
+      const progress: unknown[] = [];
       const artifacts = await prepareImageArtifacts({
         docker,
         image: "registry.example/team/app:tag",
         maxTemporaryBytes: 10 * 1024 * 1024,
+        onProgress: (event) => progress.push(event),
         workspace,
       });
 
@@ -89,6 +91,15 @@ describe("Docker image artifacts", () => {
         await gunzipAsync(await readFile(artifacts.layers[0]!.filePath)),
         layerBytes,
       );
+      assert.deepEqual(progress, [
+        { phase: "compressing", totalLayers: 1 },
+        {
+          layer: 1,
+          phase: "layer-compressed",
+          size: artifacts.layers[0]!.size,
+          totalLayers: 1,
+        },
+      ]);
     } finally {
       if (previousFixture === undefined)
         delete process.env.REGPUSH_TEST_FIXTURE;

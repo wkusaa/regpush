@@ -27,9 +27,25 @@ describe("chunked registry upload", () => {
         timeoutMs: 5_000,
         username: registry.username,
       });
-      const result = await client.uploadBlob(digest, blobPath, blob.length);
+      const progress: {
+        chunkSize: number;
+        totalBytes: number;
+        uploadedBytes: number;
+      }[] = [];
+      const result = await client.uploadBlob(
+        digest,
+        blobPath,
+        blob.length,
+        (event) => progress.push(event),
+      );
 
       assert.equal(result, "uploaded");
+      assert.deepEqual(progress, [
+        { chunkSize: 4, totalBytes: 10, uploadedBytes: 0 },
+        { chunkSize: 4, totalBytes: 10, uploadedBytes: 4 },
+        { chunkSize: 4, totalBytes: 10, uploadedBytes: 8 },
+        { chunkSize: 4, totalBytes: 10, uploadedBytes: 10 },
+      ]);
       assert.deepEqual(registry.state.patches, [
         { contentRange: "0-3", length: 4, range: "0-3" },
         { contentRange: "4-7", length: 4, range: "0-7" },

@@ -11,6 +11,12 @@ export type RegistryClientOptions = {
 
 export type UploadResult = "existing" | "uploaded";
 
+export type BlobUploadProgress = {
+  chunkSize: number;
+  totalBytes: number;
+  uploadedBytes: number;
+};
+
 const DEFAULT_MAX_CHUNK_BYTES = 100 * 1024 * 1024;
 
 export class RegistryRequestError extends Error {
@@ -99,6 +105,7 @@ export class RegistryClient {
     digest: string,
     filePath: string,
     size: number,
+    onProgress?: ((progress: BlobUploadProgress) => void) | undefined,
   ): Promise<UploadResult> {
     if (!/^sha256:[a-f0-9]{64}$/u.test(digest))
       throw new Error("Blob digest is malformed");
@@ -154,6 +161,7 @@ export class RegistryClient {
       await discardBody(startResponse);
       throw new Error("Registry chunk size is outside supported bounds");
     }
+    onProgress?.({ chunkSize, totalBytes: size, uploadedBytes: 0 });
     let location = this.#uploadLocation(
       startResponse,
       `${startPath}${encodeURIComponent(uploadId)}`,
@@ -191,6 +199,7 @@ export class RegistryClient {
       location = this.#uploadLocation(patchResponse, location.pathname);
       await discardBody(patchResponse);
       written = end + 1;
+      onProgress?.({ chunkSize, totalBytes: size, uploadedBytes: written });
     }
 
     location.searchParams.set("digest", digest);

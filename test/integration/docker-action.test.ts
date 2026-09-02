@@ -105,6 +105,14 @@ it("pushes a buildx --load image through the packaged CLI and cleans artifacts",
         "u",
       ),
     );
+    assert.match(execution.output, /Checking local Docker image/u);
+    assert.match(execution.output, /Preparing image artifacts/u);
+    assert.match(execution.output, /Prepared [0-9]+ layers?/u);
+    assert.match(execution.output, /Layer 1\/[0-9]+: checking registry/u);
+    assert.match(execution.output, /Layer 1\/[0-9]+: uploading/u);
+    assert.match(execution.output, /Layer 1\/[0-9]+: .*100%/u);
+    assert.match(execution.output, /Uploading manifest/u);
+    assert.match(execution.output, /Temporary artifacts removed/u);
     assert.match(execution.output, /Uploaded layers: [0-9]+\/[0-9]+/u);
     assert.match(execution.output, /Success:/u);
 

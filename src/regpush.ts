@@ -44,6 +44,24 @@ const DEFAULT_PROCESS_TIMEOUT_MS = 10 * 60 * 1_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 const UPLOAD_CONCURRENCY = 3;
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KiB", "MiB", "GiB", "TiB"];
+  let value = bytes / 1024;
+  let unit = units[0]!;
+  for (let index = 1; index < units.length && value >= 1024; index += 1) {
+    value /= 1024;
+    unit = units[index]!;
+  }
+  return `${value >= 10 ? value.toFixed(1) : value.toFixed(2)} ${unit}`;
+}
+
+function artifactLabel(index: number, layerCount: number): string {
+  return index < layerCount
+    ? `Layer ${index + 1}/${layerCount}`
+    : "Configuration";
+}
+
 function validateCredentials(username: string, password: string): void {
   if (username.length === 0 || password.length === 0)
     throw new Error("Registry username and password are required");
@@ -90,16 +108,35 @@ function retryable(error: unknown): boolean {
 async function uploadWithRetry(
   client: RegistryClient,
   artifact: BlobArtifact,
+  label: string,
   maxRetries: number,
   logger: RegpushLogger,
 ): Promise<UploadResult> {
+  logger.info(`${label}: checking registry`);
   for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
     try {
-      return await client.uploadBlob(
+      const result = await client.uploadBlob(
         artifact.digest,
         artifact.filePath,
         artifact.size,
+        ({ chunkSize, totalBytes, uploadedBytes }) => {
+          if (uploadedBytes === 0) {
+            const chunks = Math.ceil(totalBytes / chunkSize);
+            logger.info(
+              `${label}: uploading ${formatBytes(totalBytes)} in ${chunks} ${chunks === 1 ? "chunk" : "chunks"}`,
+            );
+            return;
+          }
+          const percent = Math.floor((uploadedBytes / totalBytes) * 100);
+          logger.info(
+            `${label}: ${percent}% (${formatBytes(uploadedBytes)} / ${formatBytes(totalBytes)})`,
+          );
+        },
       );
+      logger.info(
+        `${label}: ${result === "existing" ? "already exists" : "uploaded"}`,
+      );
+      return result;
     } catch (error) {
       if (attempt === maxRetries || !retryable(error)) throw error;
       logger.warning(
@@ -116,6 +153,7 @@ async function uploadWithRetry(
 async function uploadArtifacts(
   client: RegistryClient,
   artifacts: readonly BlobArtifact[],
+  layerCount: number,
   maxRetries: number,
   logger: RegpushLogger,
 ): Promise<PromiseSettledResult<UploadResult>[]> {
@@ -135,6 +173,7 @@ async function uploadArtifacts(
               value: await uploadWithRetry(
                 client,
                 artifacts[index]!,
+                artifactLabel(index, layerCount),
                 maxRetries,
                 logger,
               ),
@@ -194,6 +233,7 @@ export async function runRegpush(
       "Insecure HTTP is enabled; registry credentials will travel without TLS",
     );
   logger.info(`Image: ${image.image}`);
+  logger.info("Checking local Docker image...");
 
   const docker = new DockerClient({
     dockerPath: options.dockerPath,
@@ -215,12 +255,31 @@ export async function runRegpush(
   let failure: unknown;
 
   try {
+    logger.info("Preparing image artifacts...");
     const artifacts = await prepareImageArtifacts({
       docker,
       image: image.image,
       maxTemporaryBytes,
+      onProgress: (progress) => {
+        if (progress.phase === "compressing") {
+          logger.info(
+            `Compressing ${progress.totalLayers} ${progress.totalLayers === 1 ? "layer" : "layers"} (up to 3 concurrent)...`,
+          );
+          return;
+        }
+        logger.info(
+          `Preparation: compressed layer ${progress.layer}/${progress.totalLayers} (${formatBytes(progress.size)})`,
+        );
+      },
       workspace,
     });
+    const compressedBytes = artifacts.layers.reduce(
+      (total, artifact) => total + artifact.size,
+      0,
+    );
+    logger.info(
+      `Prepared ${artifacts.layers.length} ${artifacts.layers.length === 1 ? "layer" : "layers"} (${formatBytes(compressedBytes)} compressed)`,
+    );
     const client = new RegistryClient({
       baseUrl: `${protocol}://${image.registry}`,
       password: options.password,
@@ -230,9 +289,13 @@ export async function runRegpush(
     });
 
     const allArtifacts = [...artifacts.layers, artifacts.config];
+    logger.info(
+      `Uploading ${artifacts.layers.length} ${artifacts.layers.length === 1 ? "layer" : "layers"} and configuration (up to ${UPLOAD_CONCURRENCY} concurrent)...`,
+    );
     const uploadResults = await uploadArtifacts(
       client,
       allArtifacts,
+      artifacts.layers.length,
       maxRetries,
       logger,
     );
@@ -260,7 +323,9 @@ export async function runRegpush(
       mediaType: manifestMediaType,
       schemaVersion: 2,
     };
+    logger.info("Uploading manifest...");
     await client.uploadManifest(image.reference, manifest, manifestMediaType);
+    logger.info("Manifest uploaded");
 
     const uploadedLayers = layerResults.filter(
       (result) => result.value === "uploaded",
@@ -271,16 +336,22 @@ export async function runRegpush(
       totalLayers: artifacts.layers.length,
       uploadedLayers,
     };
-    logger.info(
-      `Uploaded layers: ${uploadedLayers}/${artifacts.layers.length}`,
-    );
-    logger.info(`Success: ${image.image}`);
   } catch (error) {
     failure = error;
   }
 
   try {
+    logger.info(
+      options.cleanup
+        ? "Cleaning temporary artifacts..."
+        : "Cleanup disabled; retaining completed temporary artifacts...",
+    );
     await workspace.dispose();
+    logger.info(
+      options.cleanup
+        ? "Temporary artifacts removed"
+        : "Completed temporary artifacts retained",
+    );
   } catch (cleanupError) {
     if (failure === undefined) failure = cleanupError;
     else
@@ -290,5 +361,9 @@ export async function runRegpush(
   if (failure !== undefined) throw failure;
   if (result === undefined)
     throw new Error("regpush finished without a result");
+  logger.info(
+    `Uploaded layers: ${result.uploadedLayers}/${result.totalLayers}`,
+  );
+  logger.info(`Success: ${image.image}`);
   return result;
 }
