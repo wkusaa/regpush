@@ -1,0 +1,9 @@
+regpush
+
+This product includes software derived from the push tool in
+cloudflare/serverless-registry:
+https://github.com/cloudflare/serverless-registry
+
+The original work and this derivative are distributed under the Apache
+License, Version 2.0. The repository history for the original work records
+contributions from the cloudflare/serverless-registry contributors.

@@ -1,0 +1,45 @@
+# Dependencies and package-manager caches
+node_modules/
+.npm/
+.yarn/
+.pnpm-store/
+
+# Logs, coverage, and build caches
+*.log
+coverage/
+.nyc_output/
+*.tsbuildinfo
+.eslintcache
+.cache/
+
+# regpush temporary and retained artifacts
+.output-image/
+.regpush-cache/
+regpush-cache/
+*.tar
+*.tar.gz
+*.part
+regpush
+
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+.docker/
+**/.docker/config.json
+*.pem
+*.key
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~

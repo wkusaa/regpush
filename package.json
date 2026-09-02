@@ -1,0 +1,41 @@
+{
+  "name": "regpush",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Push local Docker images through a chunk-aware OCI registry upload protocol",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wkusaa/regpush.git"
+  },
+  "bugs": "https://github.com/wkusaa/regpush/issues",
+  "homepage": "https://github.com/wkusaa/regpush#readme",
+  "type": "module",
+  "engines": {
+    "node": "24.20.0"
+  },
+  "dependencies": {
+    "tar": "7.5.22"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check:dist": "npm run build && git diff --exit-code -- dist",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "test": "node --import tsx --test test/unit/*.test.ts test/protocol/*.test.ts",
+    "test:integration": "node --import tsx --test test/integration/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.13.3",
+    "esbuild": "0.28.2",
+    "eslint": "10.9.1",
+    "prettier": "3.9.6",
+    "tsx": "4.23.13",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.69.0",
+    "yaml": "2.9.0"
+  }
+}

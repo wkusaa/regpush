@@ -1,0 +1,30 @@
+name: regpush
+description: Push an already-built local Docker image through a chunk-aware OCI registry upload protocol
+author: wkusaa
+
+inputs:
+  image:
+    description: Fully qualified local image reference, including registry and repository
+    required: true
+  username:
+    description: Registry username
+    required: true
+  password:
+    description: Registry password
+    required: true
+  insecure-http:
+    description: Allow plain HTTP instead of HTTPS
+    required: false
+    default: "false"
+  cleanup:
+    description: Remove saved images, extracted layers, and compressed temporary files
+    required: false
+    default: "true"
+
+runs:
+  using: node24
+  main: dist/index.js
+
+branding:
+  icon: upload-cloud
+  color: orange

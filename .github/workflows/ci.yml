@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=moderate
+
+      - name: Check types, formatting, and lint
+        run: |
+          npm run typecheck
+          npm run format:check
+          npm run lint
+
+      - name: Run unit and protocol tests
+        run: npm test
+
+      - name: Verify bundled action is current
+        run: npm run check:dist
+
+      - name: Run Docker integration tests
+        env:
+          REGPUSH_REQUIRE_DOCKER: "1"
+        run: npm run test:integration
+
+      - name: Start local action smoke registry
+        run: |
+          node --import tsx test/fixtures/action-smoke-server.ts "$RUNNER_TEMP/regpush-origin" "$RUNNER_TEMP/regpush-state" >"$RUNNER_TEMP/regpush-server.log" 2>&1 &
+          server_pid=$!
+          echo "REGPUSH_SMOKE_PID=$server_pid" >> "$GITHUB_ENV"
+          for attempt in {1..50}; do
+            if [ -s "$RUNNER_TEMP/regpush-origin" ]; then break; fi
+            sleep 0.1
+          done
+          origin=$(<"$RUNNER_TEMP/regpush-origin")
+          echo "REGPUSH_SMOKE_IMAGE=${origin#http://}/smoke/nested/app:sha-test" >> "$GITHUB_ENV"
+
+      - name: Build local action smoke image
+        run: |
+          mkdir -p "$RUNNER_TEMP/regpush-context"
+          printf 'FROM scratch\nCOPY payload.txt /payload.txt\n' > "$RUNNER_TEMP/regpush-context/Dockerfile"
+          printf 'regpush action smoke\n' > "$RUNNER_TEMP/regpush-context/payload.txt"
+          docker buildx build --load --tag "$REGPUSH_SMOKE_IMAGE" "$RUNNER_TEMP/regpush-context"
+
+      - name: Push with the packaged action
+        uses: ./
+        with:
+          image: ${{ env.REGPUSH_SMOKE_IMAGE }}
+          username: action-test-user
+          password: action-test-password
+          insecure-http: "true"
+
+      - name: Verify action smoke result
+        run: node --import tsx test/fixtures/verify-action-smoke.ts "$RUNNER_TEMP/regpush-state"
+
+      - name: Stop local action smoke registry
+        if: always()
+        run: |
+          if [ -n "${REGPUSH_SMOKE_PID:-}" ]; then kill "$REGPUSH_SMOKE_PID" || true; fi
