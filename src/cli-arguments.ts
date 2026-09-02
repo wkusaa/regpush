@@ -12,7 +12,8 @@ export function parseCliArguments(args: readonly string[]): CliArguments {
   let insecureHttp = false;
   for (const argument of args) {
     if (argument === "--insecure-http") insecureHttp = true;
-    else if (argument === "--no-cleanup") cleanup = false;
+    else if (argument === "--cache" || argument === "--no-cleanup")
+      cleanup = false;
     else if (argument === "--help" || argument === "-h") help = true;
     else if (argument.startsWith("-"))
       throw new Error(`Unknown option: ${argument}`);

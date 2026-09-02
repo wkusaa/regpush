@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import path from "node:path";
 
 export type ImageWorkspaceOptions = {
@@ -28,12 +28,14 @@ export class ImageWorkspace {
   readonly cacheDirectory: string;
   readonly cleanup: boolean;
   readonly extractedDirectory: string;
+  readonly imageId: string;
   readonly root: string;
   readonly tarPath: string;
 
-  private constructor(root: string, cleanup: boolean) {
+  private constructor(root: string, cleanup: boolean, imageId: string) {
     this.root = root;
     this.cleanup = cleanup;
+    this.imageId = imageId;
     this.tarPath = path.join(root, "image.tar");
     this.extractedDirectory = path.join(root, "image");
     this.cacheDirectory = path.join(root, "cache");
@@ -51,9 +53,34 @@ export class ImageWorkspace {
           path.join(options.baseDirectory, `regpush-${normalizedId}-`),
         )
       : path.join(options.baseDirectory, `regpush-${normalizedId}`);
-    await mkdir(path.join(root, "image"), { recursive: true });
-    await mkdir(path.join(root, "cache"), { recursive: true });
-    return new ImageWorkspace(root, options.cleanup);
+    await mkdir(root, { mode: 0o700, recursive: true });
+    await chmod(root, 0o700);
+    await mkdir(path.join(root, "image"), { mode: 0o700, recursive: true });
+    await mkdir(path.join(root, "cache"), { mode: 0o700, recursive: true });
+    await Promise.all([
+      chmod(path.join(root, "image"), 0o700),
+      chmod(path.join(root, "cache"), 0o700),
+    ]);
+    return new ImageWorkspace(root, options.cleanup, options.imageId);
+  }
+
+  async resetForPreparation(): Promise<void> {
+    await Promise.all([
+      rm(this.tarPath, { force: true }),
+      rm(this.extractedDirectory, { force: true, recursive: true }),
+      rm(this.cacheDirectory, { force: true, recursive: true }),
+    ]);
+    await Promise.all([
+      mkdir(this.extractedDirectory, { mode: 0o700, recursive: true }),
+      mkdir(this.cacheDirectory, { mode: 0o700, recursive: true }),
+    ]);
+  }
+
+  async removePreparationSources(): Promise<void> {
+    await Promise.all([
+      rm(this.tarPath, { force: true }),
+      rm(this.extractedDirectory, { force: true, recursive: true }),
+    ]);
   }
 
   async dispose(): Promise<void> {
@@ -61,6 +88,7 @@ export class ImageWorkspace {
       await rm(this.root, { force: true, recursive: true });
       return;
     }
+    await this.removePreparationSources();
     await removePartialFiles(this.root);
   }
 }

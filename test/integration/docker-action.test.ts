@@ -127,6 +127,38 @@ it("pushes a buildx --load image through the packaged CLI and cleans artifacts",
       manifest.layers.every((layer) => registry.state.blobs.has(layer.digest)),
     );
     assert.deepEqual(await readdir(workspaceBase), []);
+
+    const cacheBase = path.join(base, "cache");
+    const cacheEnvironment = {
+      ...process.env,
+      REGPUSH_CACHE_DIR: cacheBase,
+      REGPUSH_PASSWORD: testPassword,
+      REGPUSH_REQUEST_TIMEOUT_MS: "5000",
+      REGPUSH_USERNAME: testUsername,
+    };
+    const cacheWarmup = await run(
+      process.execPath,
+      [path.resolve("dist/cli.js"), "--insecure-http", "--cache", image],
+      cacheEnvironment,
+    );
+    assert.equal(cacheWarmup.code, 0);
+    assert.match(cacheWarmup.output, /Compressing [0-9]+ layers?/u);
+
+    const cacheReuse = await run(
+      process.execPath,
+      [path.resolve("dist/cli.js"), "--insecure-http", "--cache", image],
+      cacheEnvironment,
+    );
+    assert.equal(cacheReuse.code, 0);
+    assert.match(
+      cacheReuse.output,
+      /Cache hit: reusing [0-9]+ layers?.*compression skipped/u,
+    );
+    assert.doesNotMatch(cacheReuse.output, /Compressing [0-9]+ layers?/u);
+    assert.doesNotMatch(
+      `${cacheWarmup.output}${cacheReuse.output}`,
+      new RegExp(`${testUsername}|${testPassword}`, "u"),
+    );
   } finally {
     await run("docker", ["image", "rm", image]);
     await registry.close();

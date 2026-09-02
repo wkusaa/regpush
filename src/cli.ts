@@ -5,9 +5,10 @@ import { runRegpush } from "./regpush.ts";
 
 function usage(): string {
   return [
-    "Usage: regpush [--insecure-http] [--no-cleanup] <registry>/<repository>[:tag]",
+    "Usage: regpush [--insecure-http] [--cache|--no-cleanup] <registry>/<repository>[:tag]",
     "",
     "Set REGPUSH_USERNAME and REGPUSH_PASSWORD in the environment.",
+    "--cache retains and reuses validated artifacts for the same image ID.",
     "Passwords are never accepted as command-line arguments.",
   ].join("\n");
 }

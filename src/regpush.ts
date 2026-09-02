@@ -261,6 +261,12 @@ export async function runRegpush(
       image: image.image,
       maxTemporaryBytes,
       onProgress: (progress) => {
+        if (progress.phase === "cache-hit") {
+          logger.info(
+            `Cache hit: reusing ${progress.totalLayers} ${progress.totalLayers === 1 ? "layer" : "layers"} (${formatBytes(progress.totalBytes)}); Docker export and compression skipped`,
+          );
+          return;
+        }
         if (progress.phase === "compressing") {
           logger.info(
             `Compressing ${progress.totalLayers} ${progress.totalLayers === 1 ? "layer" : "layers"} (up to 3 concurrent)...`,

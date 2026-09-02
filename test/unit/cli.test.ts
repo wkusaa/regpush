@@ -20,6 +20,18 @@ describe("CLI arguments", () => {
     );
   });
 
+  it("accepts --cache as the explicit reusable-cache option", () => {
+    assert.deepEqual(
+      parseCliArguments(["--cache", "registry.example/team/app:tag"]),
+      {
+        cleanup: false,
+        help: false,
+        image: "registry.example/team/app:tag",
+        insecureHttp: false,
+      },
+    );
+  });
+
   for (const passwordArgument of ["--password=visible", "--password", "-p"]) {
     it(`rejects visible password argument ${passwordArgument}`, () => {
       assert.throws(

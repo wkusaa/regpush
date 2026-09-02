@@ -17,7 +17,7 @@ inputs:
     required: false
     default: "false"
   cleanup:
-    description: Remove saved images, extracted layers, and compressed temporary files
+    description: Remove temporary files; set false to retain and reuse a validated image-ID cache
     required: false
     default: "true"
 

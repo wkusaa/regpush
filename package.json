@@ -1,6 +1,6 @@
 {
   "name": "regpush",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "description": "Push local Docker images through a chunk-aware OCI registry upload protocol",
   "license": "Apache-2.0",

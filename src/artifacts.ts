@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { readFile, rename, rm, stat } from "node:fs/promises";
+import { chmod, readFile, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
 import { createGzip, constants as zlibConstants } from "node:zlib";
 import * as tar from "tar";
 
+import { readArtifactCache, writeArtifactCache } from "./artifact-cache.ts";
 import type { DockerClient } from "./docker.ts";
 import type { ImageWorkspace } from "./workspace.ts";
 
@@ -28,6 +29,11 @@ export type ImageArtifacts = {
 };
 
 export type ArtifactPreparationProgress =
+  | {
+      phase: "cache-hit";
+      totalBytes: number;
+      totalLayers: number;
+    }
   | {
       phase: "compressing";
       totalLayers: number;
@@ -163,6 +169,23 @@ export async function prepareImageArtifacts(
     throw new Error("Temporary storage limit must be a positive safe integer");
   }
 
+  const cached = await readArtifactCache(
+    options.workspace,
+    options.maxTemporaryBytes,
+    MAX_TAR_ENTRIES,
+  );
+  if (cached) {
+    options.onProgress?.({
+      phase: "cache-hit",
+      totalBytes:
+        cached.config.size +
+        cached.layers.reduce((total, layer) => total + layer.size, 0),
+      totalLayers: cached.layers.length,
+    });
+    return cached;
+  }
+
+  await options.workspace.resetForPreparation();
   await options.docker.saveImage(options.image, options.workspace.tarPath);
   const tarSize = (await stat(options.workspace.tarPath)).size;
   if (tarSize > options.maxTemporaryBytes)
@@ -198,11 +221,14 @@ export async function prepareImageArtifacts(
     totalLayers: layerPaths.length,
   });
 
-  const configPath = safeExtractedPath(
+  const extractedConfigPath = safeExtractedPath(
     options.workspace.extractedDirectory,
     manifest.Config,
   );
-  const configBytes = await readFile(configPath);
+  const configBytes = await readFile(extractedConfigPath);
+  const configPath = path.join(options.workspace.cacheDirectory, "config.json");
+  await rename(extractedConfigPath, configPath);
+  await chmod(configPath, 0o600);
   const config: BlobArtifact = {
     digest: `sha256:${createHash("sha256").update(configBytes).digest("hex")}`,
     filePath: configPath,
@@ -238,5 +264,15 @@ export async function prepareImageArtifacts(
     },
   );
 
-  return { config, layers };
+  const artifacts = { config, layers };
+  await writeArtifactCache(
+    options.workspace,
+    artifacts,
+    usedBytes,
+    options.maxTemporaryBytes,
+  );
+  if (!options.workspace.cleanup) {
+    await options.workspace.removePreparationSources();
+  }
+  return artifacts;
 }
