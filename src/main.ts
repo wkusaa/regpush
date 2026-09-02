@@ -35,7 +35,7 @@ async function main(): Promise<void> {
 
   try {
     await runRegpush({
-      cleanup: parseBoolean(process.env["INPUT_CLEANUP"] ?? "true", "cleanup"),
+      cleanup: parseBoolean(process.env["INPUT_CLEANUP"] ?? "false", "cleanup"),
       image,
       insecureHttp: parseBoolean(
         process.env["INPUT_INSECURE-HTTP"] ?? "false",

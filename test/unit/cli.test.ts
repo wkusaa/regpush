@@ -32,6 +32,18 @@ describe("CLI arguments", () => {
     );
   });
 
+  it("caches by default and accepts --no-cache for one-shot cleanup", () => {
+    assert.equal(
+      parseCliArguments(["registry.example/team/app:tag"]).cleanup,
+      false,
+    );
+    assert.equal(
+      parseCliArguments(["--no-cache", "registry.example/team/app:tag"])
+        .cleanup,
+      true,
+    );
+  });
+
   for (const passwordArgument of ["--password=visible", "--password", "-p"]) {
     it(`rejects visible password argument ${passwordArgument}`, () => {
       assert.throws(

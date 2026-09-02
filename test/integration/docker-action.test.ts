@@ -78,7 +78,7 @@ it("pushes a buildx --load image through the packaged CLI and cleans artifacts",
 
     const execution = await run(
       process.execPath,
-      [path.resolve("dist/cli.js"), "--insecure-http", image],
+      [path.resolve("dist/cli.js"), "--insecure-http", "--no-cache", image],
       {
         ...process.env,
         REGPUSH_PASSWORD: testPassword,
@@ -138,7 +138,7 @@ it("pushes a buildx --load image through the packaged CLI and cleans artifacts",
     };
     const cacheWarmup = await run(
       process.execPath,
-      [path.resolve("dist/cli.js"), "--insecure-http", "--cache", image],
+      [path.resolve("dist/cli.js"), "--insecure-http", image],
       cacheEnvironment,
     );
     assert.equal(cacheWarmup.code, 0);
@@ -146,7 +146,7 @@ it("pushes a buildx --load image through the packaged CLI and cleans artifacts",
 
     const cacheReuse = await run(
       process.execPath,
-      [path.resolve("dist/cli.js"), "--insecure-http", "--cache", image],
+      [path.resolve("dist/cli.js"), "--insecure-http", image],
       cacheEnvironment,
     );
     assert.equal(cacheReuse.code, 0);

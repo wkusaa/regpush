@@ -6,7 +6,7 @@ export type CliArguments = {
 };
 
 export function parseCliArguments(args: readonly string[]): CliArguments {
-  let cleanup = true;
+  let cleanup = false;
   let help = false;
   let image: string | undefined;
   let insecureHttp = false;
@@ -14,6 +14,7 @@ export function parseCliArguments(args: readonly string[]): CliArguments {
     if (argument === "--insecure-http") insecureHttp = true;
     else if (argument === "--cache" || argument === "--no-cleanup")
       cleanup = false;
+    else if (argument === "--no-cache") cleanup = true;
     else if (argument === "--help" || argument === "-h") help = true;
     else if (argument.startsWith("-"))
       throw new Error(`Unknown option: ${argument}`);

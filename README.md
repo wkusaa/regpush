@@ -44,7 +44,7 @@ steps:
       password: ${{ secrets.XCR_PASSWORD }}
 ```
 
-Prefer immutable tags such as `sha-<commit>` over `latest`. The optional `insecure-http` input defaults to `false`; enable it only for a trusted local test registry. The optional `cleanup` input defaults to `true`.
+Prefer immutable tags such as `sha-<commit>` over `latest`. The optional `insecure-http` input defaults to `false`; enable it only for a trusted local test registry. Artifact caching is enabled by default. Set the optional `cleanup` input to `true` for a one-shot push that removes the cache afterward.
 
 ## Local CLI
 
@@ -56,7 +56,7 @@ export REGPUSH_PASSWORD='registry-password'
 node dist/cli.js xcr.x-tech.my/xila-app:sha-<commit>
 ```
 
-For a loopback registry, add `--insecure-http`. Add `--cache` to retain and reuse validated artifacts for the same local Docker image ID. Repeated pushes then skip Docker export, extraction, and gzip compression. `--no-cleanup` remains an alias for `--cache`. `REGPUSH_CACHE_DIR` selects the cache directory. The CLI never accepts a password argument.
+For a loopback registry, add `--insecure-http`. The CLI retains and reuses validated artifacts for the same local Docker image ID by default. Repeated pushes then skip Docker export, extraction, and gzip compression. Add `--no-cache` for a one-shot push that removes all artifacts afterward. `--cache` and `--no-cleanup` remain accepted compatibility aliases for the default behavior. `REGPUSH_CACHE_DIR` selects the cache directory. The CLI never accepts a password argument.
 
 ## Errors and cleanup
 
@@ -66,7 +66,7 @@ Progress logs cover image preparation, layer compression, registry checks, every
 
 Advanced environment limits are `REGPUSH_MAX_RETRIES` from 1 to 5, `REGPUSH_MAX_TEMP_BYTES` up to 1 TiB, `REGPUSH_PROCESS_TIMEOUT_MS` up to 30 minutes, and `REGPUSH_REQUEST_TIMEOUT_MS` up to 5 minutes. Defaults are 3 retries, 20 GiB of temporary storage, a 10-minute Docker timeout, and a 60-second network timeout.
 
-By default, the saved image tar, extracted image, compressed layers, and incomplete files are removed on success and failure. `cleanup: false`, `--cache`, or `--no-cleanup` explicitly retains completed compressed layers and configuration by local Docker image ID. Before reuse, regpush verifies the metadata, file type, size, and SHA-256 digest of every cached artifact. A missing, incomplete, corrupt, or mismatched cache is discarded and rebuilt. Raw Docker exports and extracted layers are removed after the reusable cache is written, and incomplete `.part` files are always removed.
+By default, regpush caches completed compressed layers and configuration by local Docker image ID. Before reuse, it verifies the metadata, file type, size, and SHA-256 digest of every cached artifact. A missing, incomplete, corrupt, or mismatched cache is discarded and rebuilt. Raw Docker exports, extracted layers, and incomplete `.part` files are always removed. Use `--no-cache` locally or `cleanup: true` in the action to remove the completed cache on success or failure.
 
 ## Security model
 

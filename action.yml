@@ -17,9 +17,9 @@ inputs:
     required: false
     default: "false"
   cleanup:
-    description: Remove temporary files; set false to retain and reuse a validated image-ID cache
+    description: Disable caching and remove all artifacts after the push
     required: false
-    default: "true"
+    default: "false"
 
 runs:
   using: node24

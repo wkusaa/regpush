@@ -19,7 +19,7 @@ describe("GitHub Action metadata", () => {
     assert.equal(metadata.inputs.username.required, true);
     assert.equal(metadata.inputs.password.required, true);
     assert.equal(metadata.inputs["insecure-http"].default, "false");
-    assert.equal(metadata.inputs.cleanup.default, "true");
+    assert.equal(metadata.inputs.cleanup.default, "false");
     assert.deepEqual(metadata.runs, { main: "dist/index.js", using: "node24" });
   });
 });

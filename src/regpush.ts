@@ -350,13 +350,13 @@ export async function runRegpush(
     logger.info(
       options.cleanup
         ? "Cleaning temporary artifacts..."
-        : "Cleanup disabled; retaining completed temporary artifacts...",
+        : "Reusable cache enabled; retaining validated artifacts...",
     );
     await workspace.dispose();
     logger.info(
       options.cleanup
         ? "Temporary artifacts removed"
-        : "Completed temporary artifacts retained",
+        : "Validated artifacts cached",
     );
   } catch (cleanupError) {
     if (failure === undefined) failure = cleanupError;
