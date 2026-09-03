@@ -1,89 +1,163 @@
 # regpush
 
-`regpush` pushes an already-built local Docker image to a registry that implements the chunked upload extension used by `cloudflare/serverless-registry`. It saves the image, gzip-compresses its layers, uploads each blob in server-advertised chunks, and publishes an OCI image manifest.
+**When Docker Hub and other hosted registries get too expensive for your workload, put the blobs in Cloudflare R2. That’s it. That’s the pitch.**
 
-The GitHub Action is tested on `ubuntu-latest` x64. The local CLI requires Node.js 24, Docker, and a Linux or macOS host. Docker must be running, and the requested image must exist in the local image store.
+`regpush` pushes an already-built local Docker image to a [`cloudflare/serverless-registry`](https://github.com/cloudflare/serverless-registry)-compatible deployment. It exports the image, compresses its layers, and sends them in bounded chunks through a Cloudflare Worker for storage in R2.
+
+![CLI deployment flow](docs/cli-deployment.png)
+
+`regpush` is the push client, not the registry server. You still need a compatible Worker and R2 deployment. Pulls continue to use the normal OCI registry interface.
+
+## Why this exists
+
+Container images are mostly immutable blobs. If conventional registry storage or transfer pricing no longer fits your workload, R2 can be a practical backing store—especially when you already use Cloudflare.
+
+The awkward part is getting large image layers through Worker request limits. A normal `docker push` can send a request that is too large. `regpush` speaks the serverless registry’s chunked upload extension instead:
+
+- It requires the image to exist in local Docker.
+- It validates the registry, nested repository path, and tag before doing work.
+- It uploads layers in bounded chunks with three concurrent workers and bounded retries.
+- It skips blobs the registry already has.
+- It caches validated compressed artifacts by Docker image ID, so repeated pushes avoid another export and recompression.
+- It uploads the manifest only after every layer and the image configuration have succeeded.
 
 ## GitHub Action
 
-Build with `--load` so the following action step can find the image:
+The action runs on a standard `ubuntu-latest` runner. It ships bundled JavaScript and uses GitHub’s built-in Node.js action runtime, so the consuming workflow does not install Bun, compile anything, or clone this repository.
+
+Build with `--load` so the image is present in the runner’s local Docker daemon, then push it:
 
 ```yaml
-- name: Build image
-  uses: docker/build-push-action@v6
-  with:
-    context: .
-    load: true
-    tags: ${{ env.XILA_IMAGE }}
+name: Build and push image
 
-- name: Push image to XCR
-  uses: wkusaa/regpush@v1
-  with:
-    image: ${{ env.XILA_IMAGE }}
-    username: ${{ secrets.XCR_USERNAME }}
-    password: ${{ secrets.XCR_PASSWORD }}
+on:
+  push:
+    branches: [main]
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      IMAGE: registry.example.com/team/app:sha-${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build local image
+        run: docker buildx build --load --tag "$IMAGE" .
+
+      - name: Push image through the Worker
+        uses: wkusaa/regpush@v1
+        with:
+          image: ${{ env.IMAGE }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
 ```
 
-The repository needs two GitHub Actions secrets: `XCR_USERNAME` and `XCR_PASSWORD`. A complete immutable-tag example is:
+Use an immutable image tag such as `sha-${{ github.sha }}`. Do not reuse a deployment tag when you can point each build at its exact commit.
 
-```yaml
-env:
-  XILA_IMAGE: xcr.x-tech.my/xila-app:sha-${{ github.sha }}
+### Action inputs
 
-steps:
-  - uses: actions/checkout@v6
+| Input           | Required | Default | Meaning                                                          |
+| --------------- | -------- | ------- | ---------------------------------------------------------------- |
+| `image`         | yes      | —       | Fully qualified image reference already loaded into Docker       |
+| `username`      | yes      | —       | Registry username                                                |
+| `password`      | yes      | —       | Registry password                                                |
+| `insecure-http` | no       | `false` | Permit plain HTTP; intended only for isolated local testing      |
+| `cleanup`       | no       | `false` | Disable caching and remove all temporary artifacts after the run |
 
-  - name: Build image into the local Docker store
-    run: docker buildx build --load --tag "$XILA_IMAGE" .
+Create `REGISTRY_USERNAME` and `REGISTRY_PASSWORD` as GitHub Actions secrets. The action masks both values before starting any subprocess and never passes the password as a command-line argument.
 
-  - name: Push image to XCR
-    uses: wkusaa/regpush@v1
-    with:
-      image: ${{ env.XILA_IMAGE }}
-      username: ${{ secrets.XCR_USERNAME }}
-      password: ${{ secrets.XCR_PASSWORD }}
-```
-
-Prefer immutable tags such as `sha-<commit>` over `latest`. The optional `insecure-http` input defaults to `false`; enable it only for a trusted local test registry. Artifact caching is enabled by default. Set the optional `cleanup` input to `true` for a one-shot push that removes the cache afterward.
+Caching is enabled by default. GitHub-hosted runners are ephemeral, so the cache normally lasts only for the job unless you deliberately persist it. Set `cleanup: true` when image contents must not remain on disk after the step.
 
 ## Local CLI
 
-Use the bundled CLI without Bun or a compilation step:
+Local use is tested on macOS and Linux. It requires:
 
-```bash
-export REGPUSH_USERNAME='registry-user'
-export REGPUSH_PASSWORD='registry-password'
-node dist/cli.js xcr.x-tech.my/xila-app:sha-<commit>
+- Docker with the target image loaded locally
+- Node.js `24.20.0`
+- npm
+
+Build once from a clone:
+
+```sh
+npm ci
+npm run build
 ```
 
-For a loopback registry, add `--insecure-http`. The CLI retains and reuses validated artifacts for the same local Docker image ID by default. Repeated pushes then skip Docker export, extraction, and gzip compression. Add `--no-cache` for a one-shot push that removes all artifacts afterward. `--cache` and `--no-cleanup` remain accepted compatibility aliases for the default behavior. `REGPUSH_CACHE_DIR` selects the cache directory. The CLI never accepts a password argument.
+Provide credentials through the environment, then pass only the image reference on the command line:
 
-## Errors and cleanup
+```sh
+export REGPUSH_USERNAME='registry-user'
+read -rs REGPUSH_PASSWORD && export REGPUSH_PASSWORD
 
-`regpush` exits nonzero when Docker cannot find the image, authentication fails, a chunk response has an invalid range, retries are exhausted, a blob is incomplete, or the registry rejects the manifest. Network operations, Docker commands, retries, concurrency, archive entries, and temporary bytes have fixed bounds. Advanced bounds can be configured through the documented `REGPUSH_*` environment variables.
+node dist/cli.js registry.example.com/team/app:sha-abc123
 
-Progress logs cover image preparation, layer compression, registry checks, every acknowledged upload chunk, manifest publication, and cleanup. The output uses durable log lines instead of an animated terminal-only progress bar, so GitHub Actions retains the complete history.
+unset REGPUSH_PASSWORD
+```
 
-Advanced environment limits are `REGPUSH_MAX_RETRIES` from 1 to 5, `REGPUSH_MAX_TEMP_BYTES` up to 1 TiB, `REGPUSH_PROCESS_TIMEOUT_MS` up to 30 minutes, and `REGPUSH_REQUEST_TIMEOUT_MS` up to 5 minutes. Defaults are 3 retries, 20 GiB of temporary storage, a 10-minute Docker timeout, and a 60-second network timeout.
+The full CLI form is:
 
-By default, regpush caches completed compressed layers and configuration by local Docker image ID. Before reuse, it verifies the metadata, file type, size, and SHA-256 digest of every cached artifact. A missing, incomplete, corrupt, or mismatched cache is discarded and rebuilt. Raw Docker exports, extracted layers, and incomplete `.part` files are always removed. Use `--no-cache` locally or `cleanup: true` in the action to remove the completed cache on success or failure.
+```text
+regpush [--insecure-http] [--no-cache] <registry>/<repository>[:tag]
+```
+
+Caching is on by default. `--no-cache` uses a fresh temporary workspace and removes it on both success and failure. `--insecure-http` is opt-in because Basic credentials sent over plain HTTP are visible on the network.
+
+## What a push does
+
+1. Validate the image reference and confirm the image exists in Docker.
+2. Reuse a digest-validated image-ID cache when available.
+3. Otherwise export the image, extract it, and gzip up to three layers concurrently.
+4. Check the registry for each layer and upload only missing content in server-advertised chunks.
+5. Upload the OCI manifest after all blobs succeed.
+6. Remove export and extraction files. Keep only the validated cache unless caching was disabled.
+
+Progress output includes preparation status, cache hits, per-layer checks, chunk progress, the uploaded layer count, cleanup status, and final success. Rejected or incomplete uploads return a nonzero exit code and do not publish the manifest.
+
+## Cache and limits
+
+The default local cache lives under the operating system’s temporary directory in `regpush-cache`. Cache directories are private to the current user, entries are keyed by Docker image ID, and every cached artifact is checked against its recorded SHA-256 digest before reuse. Incomplete `.part` files are removed.
+
+These optional environment variables tune the built-in safety bounds:
+
+| Variable                     | Default           | Allowed range      |
+| ---------------------------- | ----------------- | ------------------ |
+| `REGPUSH_CACHE_DIR`          | OS temp directory | Writable directory |
+| `REGPUSH_MAX_RETRIES`        | `3`               | `1`–`5`            |
+| `REGPUSH_MAX_TEMP_BYTES`     | `20 GiB`          | `1 MiB`–`1 TiB`    |
+| `REGPUSH_PROCESS_TIMEOUT_MS` | `600000`          | `1000`–`1800000`   |
+| `REGPUSH_REQUEST_TIMEOUT_MS` | `60000`           | `1000`–`300000`    |
 
 ## Security model
 
-The action masks the username and password before Docker or network subprocess work starts. Credentials stay in action inputs or environment variables and are sent with HTTP Basic authentication. HTTPS is the default. Upload locations must remain on the original registry origin, which prevents credential forwarding to another host. Logs contain HTTP status codes, not Authorization headers or complete authentication-related response bodies.
+- HTTPS is the default and insecure HTTP requires an explicit flag or action input.
+- Authentication uses Basic auth, but credentials are accepted only through environment variables or masked action inputs.
+- Passwords and complete authentication-related response bodies are never logged.
+- Image references are validated before they reach Docker or the network.
+- The committed action bundle is built from the tagged source and checked in CI.
+- Cached files contain image data. Use `--no-cache`, `cleanup: true`, or a protected cache directory when that data is sensitive.
 
-Do not enable plain HTTP on an untrusted network. GitHub Actions workflows triggered by pull requests use only fixed mock credentials and never receive deployment secrets.
+Do not run secret-bearing workflows on untrusted pull-request code. The repository’s pull-request CI uses only a local mock registry and test-only credentials.
+
+## Cloudflare Worker and R2 limitations
+
+- This client needs the chunked protocol implemented by `cloudflare/serverless-registry`; it is not a replacement client for every OCI registry.
+- Worker request-body, CPU, execution-time, and subrequest limits still depend on your Cloudflare plan and deployment.
+- R2 storage, operation, and lifecycle behavior still apply. This client does not perform garbage collection or delete unreferenced blobs.
+- A push targets one image manifest already loaded into Docker; it does not publish a multi-platform build index directly from Buildx.
+- Availability and durability depend on your Worker, R2, DNS, and authentication configuration.
 
 ## Releases
 
-Immutable semantic tags such as `v1.0.0` identify releases. The moving `v1` tag advances only after the matching immutable release passes CI and smoke verification. Consumers that need a fixed supply-chain reference can pin the full release commit SHA.
+Immutable releases use full semantic-version tags such as `v1.0.3`. The moving `v1` tag tracks the latest compatible v1 release. Pin the full version when reproducibility matters more than automatic v1 updates.
 
-## Cloudflare Worker and R2 limits
-
-This tool works around registry uploads that exceed a Worker's inbound request limit by sending smaller sequential chunks. Cloudflare currently documents Worker request-body limits of 100 MB on Free and Pro, 200 MB on Business, and 500 MB by default on Enterprise. A registry can advertise a smaller chunk size through `oci-chunk-max-length`. See [Cloudflare Workers limits](https://developers.cloudflare.com/workers/platform/limits/).
-
-R2 still limits a single upload to 5 GiB and a multipart object to just under 5 TiB, with no more than 10,000 parts. This client implements the registry's chunk protocol, not R2's S3 multipart API, so the registry service remains responsible for mapping chunks to valid R2 operations and cleaning abandoned server-side uploads. See [Cloudflare R2 limits](https://developers.cloudflare.com/r2/platform/limits/) and [R2 multipart upload details](https://developers.cloudflare.com/r2/objects/upload-objects/).
+Source changes, the committed action bundle, and release tags are verified together in CI. Consumers should review release notes before adopting a new immutable version.
 
 ## License and attribution
 
-Licensed under Apache-2.0. The implementation derives from the `push` tool in [`cloudflare/serverless-registry`](https://github.com/cloudflare/serverless-registry); see [NOTICE](NOTICE).
+Licensed under the Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+`regpush` is derived from the push tool in [`cloudflare/serverless-registry`](https://github.com/cloudflare/serverless-registry). The original project and its contributors are acknowledged in `NOTICE` and the repository history.
