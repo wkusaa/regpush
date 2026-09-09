@@ -37,6 +37,14 @@ async function main(): Promise<void> {
     await runRegpush({
       cleanup: parseBoolean(process.env["INPUT_CLEANUP"] ?? "false", "cleanup"),
       image,
+      maxChunkBytes: optionalInteger(
+        process.env.REGPUSH_MAX_CHUNK_BYTES,
+        "REGPUSH_MAX_CHUNK_BYTES",
+      ),
+      uploadConcurrency: optionalInteger(
+        process.env.REGPUSH_UPLOAD_CONCURRENCY,
+        "REGPUSH_UPLOAD_CONCURRENCY",
+      ),
       insecureHttp: parseBoolean(
         process.env["INPUT_INSECURE-HTTP"] ?? "false",
         "insecure-http",

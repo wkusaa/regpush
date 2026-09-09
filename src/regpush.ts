@@ -3,6 +3,11 @@ import path from "node:path";
 
 import { prepareImageArtifacts, type BlobArtifact } from "./artifacts.ts";
 import { DockerClient } from "./docker.ts";
+import {
+  DEFAULT_MAX_CHUNK_BYTES,
+  DEFAULT_UPLOAD_CONCURRENCY,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+} from "./config.ts";
 import { parseImageReference } from "./reference.ts";
 import {
   RegistryClient,
@@ -24,6 +29,8 @@ export type RunRegpushOptions = {
   insecureHttp: boolean;
   logger?: RegpushLogger | undefined;
   maxRetries?: number | undefined;
+  maxChunkBytes?: number | undefined;
+  uploadConcurrency?: number | undefined;
   maxTemporaryBytes?: number | undefined;
   password: string;
   processTimeoutMs?: number | undefined;
@@ -41,8 +48,6 @@ export type RegpushResult = {
 
 const DEFAULT_MAX_TEMPORARY_BYTES = 20 * 1024 * 1024 * 1024;
 const DEFAULT_PROCESS_TIMEOUT_MS = 10 * 60 * 1_000;
-const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
-const UPLOAD_CONCURRENCY = 3;
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -140,7 +145,7 @@ async function uploadWithRetry(
     } catch (error) {
       if (attempt === maxRetries || !retryable(error)) throw error;
       logger.warning(
-        `Upload ${artifact.digest} failed; retrying attempt ${attempt + 1} of ${maxRetries}`,
+        `Upload ${artifact.digest} failed: ${error instanceof Error ? error.message : "unknown error"}; retrying attempt ${attempt + 1} of ${maxRetries}`,
       );
       await new Promise((resolve) =>
         setTimeout(resolve, Math.min(250 * 2 ** (attempt - 1), 2_000)),
@@ -156,6 +161,7 @@ async function uploadArtifacts(
   layerCount: number,
   maxRetries: number,
   logger: RegpushLogger,
+  concurrency: number,
 ): Promise<PromiseSettledResult<UploadResult>[]> {
   const results = new Array<PromiseSettledResult<UploadResult>>(
     artifacts.length,
@@ -163,7 +169,7 @@ async function uploadArtifacts(
   let cursor = 0;
   await Promise.all(
     Array.from(
-      { length: Math.min(UPLOAD_CONCURRENCY, artifacts.length) },
+      { length: Math.min(concurrency, artifacts.length) },
       async () => {
         while (cursor < artifacts.length) {
           const index = cursor++;
@@ -201,6 +207,16 @@ export async function runRegpush(
   const image = parseImageReference(options.image);
   const logger = options.logger ?? defaultLogger;
   const maxRetries = options.maxRetries ?? 3;
+  const maxChunkBytes = options.maxChunkBytes ?? DEFAULT_MAX_CHUNK_BYTES;
+  const uploadConcurrency =
+    options.uploadConcurrency ?? DEFAULT_UPLOAD_CONCURRENCY;
+  validateBoundedInteger(
+    "Maximum chunk bytes",
+    maxChunkBytes,
+    5 * 1024 * 1024,
+    100 * 1024 * 1024,
+  );
+  validateBoundedInteger("Upload concurrency", uploadConcurrency, 1, 3);
   const maxTemporaryBytes =
     options.maxTemporaryBytes ?? DEFAULT_MAX_TEMPORARY_BYTES;
   const processTimeoutMs =
@@ -290,13 +306,14 @@ export async function runRegpush(
       baseUrl: `${protocol}://${image.registry}`,
       password: options.password,
       repository: image.repository,
+      maxChunkBytes,
       timeoutMs: requestTimeoutMs,
       username: options.username,
     });
 
     const allArtifacts = [...artifacts.layers, artifacts.config];
     logger.info(
-      `Uploading ${artifacts.layers.length} ${artifacts.layers.length === 1 ? "layer" : "layers"} and configuration (up to ${UPLOAD_CONCURRENCY} concurrent)...`,
+      `Uploading ${artifacts.layers.length} ${artifacts.layers.length === 1 ? "layer" : "layers"} and configuration (up to ${uploadConcurrency} concurrent)...`,
     );
     const uploadResults = await uploadArtifacts(
       client,
@@ -304,6 +321,7 @@ export async function runRegpush(
       artifacts.layers.length,
       maxRetries,
       logger,
+      uploadConcurrency,
     );
     const rejected = uploadResults.find(
       (result): result is PromiseRejectedResult => result.status === "rejected",

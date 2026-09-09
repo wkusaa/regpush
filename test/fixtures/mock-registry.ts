@@ -7,6 +7,7 @@ import {
 
 export type MockRegistryOptions = {
   chunkSize?: number;
+  minChunkSize?: number;
   existingDigests?: Set<string>;
   failManifest?: boolean;
   interruptPatch?: boolean;
@@ -87,6 +88,9 @@ export async function startMockRegistry(options: MockRegistryOptions = {}) {
           "docker-upload-uuid": id,
           location: `/v2/${uploadStartMatch[1]!}/blobs/uploads/${id}`,
           "oci-chunk-max-length": String(options.chunkSize ?? 4),
+          ...(options.minChunkSize === undefined
+            ? {}
+            : { "oci-chunk-min-length": String(options.minChunkSize) }),
         });
         response.end();
         return;

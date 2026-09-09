@@ -1,3 +1,8 @@
+// Shared by the CLI, GitHub Action, and direct registry client.
+export const DEFAULT_MAX_CHUNK_BYTES = 10 * 1024 * 1024;
+export const DEFAULT_UPLOAD_CONCURRENCY = 1;
+export const DEFAULT_REQUEST_TIMEOUT_MS = 5 * 60 * 1_000;
+
 export function parseBoolean(value: string, name: string): boolean {
   if (value === "true") return true;
   if (value === "false") return false;

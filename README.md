@@ -16,7 +16,7 @@ The awkward part is getting large image layers through Worker request limits. A 
 
 - It requires the image to exist in local Docker.
 - It validates the registry, nested repository path, and tag before doing work.
-- It uploads layers in bounded chunks with three concurrent workers and bounded retries.
+- It uploads one layer at a time in chunks of up to 10 MiB, with bounded retries.
 - It skips blobs the registry already has.
 - It caches validated compressed artifacts by Docker image ID, so repeated pushes avoid another export and recompression.
 - It uploads the manifest only after every layer and the image configuration have succeeded.
@@ -123,13 +123,31 @@ The default local cache lives under the operating system’s temporary directory
 
 These optional environment variables tune the built-in safety bounds:
 
-| Variable                     | Default           | Allowed range      |
-| ---------------------------- | ----------------- | ------------------ |
-| `REGPUSH_CACHE_DIR`          | OS temp directory | Writable directory |
-| `REGPUSH_MAX_RETRIES`        | `3`               | `1`–`5`            |
-| `REGPUSH_MAX_TEMP_BYTES`     | `20 GiB`          | `1 MiB`–`1 TiB`    |
-| `REGPUSH_PROCESS_TIMEOUT_MS` | `600000`          | `1000`–`1800000`   |
-| `REGPUSH_REQUEST_TIMEOUT_MS` | `60000`           | `1000`–`300000`    |
+| Variable                     | Default           | Allowed range         |
+| ---------------------------- | ----------------- | --------------------- |
+| `REGPUSH_CACHE_DIR`          | OS temp directory | Writable directory    |
+| `REGPUSH_MAX_RETRIES`        | `3`               | `1`–`5`               |
+| `REGPUSH_MAX_CHUNK_BYTES`    | `10485760`        | `5242880`–`104857600` |
+| `REGPUSH_UPLOAD_CONCURRENCY` | `1`               | `1`–`3`               |
+| `REGPUSH_MAX_TEMP_BYTES`     | `20 GiB`          | `1 MiB`–`1 TiB`       |
+| `REGPUSH_PROCESS_TIMEOUT_MS` | `600000`          | `1000`–`1800000`      |
+| `REGPUSH_REQUEST_TIMEOUT_MS` | `300000`          | `1000`–`300000`       |
+
+The CLI and GitHub Action share these defaults. Neither needs shell configuration
+or workflow environment variables for 10 MiB chunks, one upload at a time, and a
+five-minute timeout per request. Smaller chunks and serial uploads reduce
+per-request size and concurrent traffic. Compression still uses up to three workers.
+
+For faster uploads on a connection that can handle more traffic, optionally try
+two concurrent uploads while keeping the default chunk size. For the CLI:
+
+```sh
+REGPUSH_UPLOAD_CONCURRENCY=2 regpush registry.example.com/team/app:latest
+```
+
+The same optional variable can be set in the GitHub Action step's `env`.
+Retries restart the affected layer. Transport errors include
+the request method, elapsed time, and available error codes such as `EPIPE`.
 
 ## Security model
 

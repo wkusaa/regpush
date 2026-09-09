@@ -1,4 +1,5 @@
 import { createReadStream } from "node:fs";
+import { DEFAULT_MAX_CHUNK_BYTES } from "./config.ts";
 
 export type RegistryClientOptions = {
   baseUrl: string;
@@ -17,7 +18,7 @@ export type BlobUploadProgress = {
   uploadedBytes: number;
 };
 
-const DEFAULT_MAX_CHUNK_BYTES = 100 * 1024 * 1024;
+const FALLBACK_REGISTRY_MAX_CHUNK_BYTES = 100 * 1024 * 1024;
 
 export class RegistryRequestError extends Error {
   readonly status: number;
@@ -73,11 +74,46 @@ export class RegistryClient {
         "Registry redirected an upload to a different origin; credentials were not forwarded",
       );
     }
-    return fetch(url, {
-      ...init,
-      redirect: "manual",
-      signal: AbortSignal.timeout(this.#timeoutMs),
-    });
+    const started = Date.now();
+    try {
+      return await fetch(url, {
+        ...init,
+        redirect: "manual",
+        signal: AbortSignal.timeout(this.#timeoutMs),
+      });
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+      const codes: string[] = [];
+      const seen = new Set<unknown>();
+      function collect(value: unknown): void {
+        if (!(value instanceof Error) || seen.has(value) || seen.size >= 12)
+          return;
+        seen.add(value);
+        const code = (value as Error & { code?: unknown }).code;
+        if (
+          typeof code === "string" &&
+          /^(?:E[A-Z0-9_]+|UND_ERR_[A-Z0-9_]+)$/u.test(code)
+        )
+          codes.push(code);
+        collect(value.cause);
+        if (value instanceof AggregateError) value.errors.forEach(collect);
+      }
+      collect(error);
+      const detail = codes.length
+        ? [...new Set(codes)].join(", ")
+        : ["AbortError", "TimeoutError", "TypeError", "SocketError"].includes(
+              error.name,
+            )
+          ? error.name
+          : "transport error";
+      const message = `Registry ${init.method ?? "GET"} request failed after ${Date.now() - started}ms: ${detail}`;
+      const wrapped =
+        error instanceof TypeError
+          ? new TypeError(message, { cause: error })
+          : new Error(message, { cause: error });
+      wrapped.name = error.name;
+      throw wrapped;
+    }
   }
 
   #url(pathname: string): URL {
@@ -146,7 +182,7 @@ export class RegistryClient {
     }
     const advertisedChunkSize =
       startResponse.headers.get("oci-chunk-max-length") ??
-      String(DEFAULT_MAX_CHUNK_BYTES);
+      String(FALLBACK_REGISTRY_MAX_CHUNK_BYTES);
     if (!/^[1-9][0-9]*$/u.test(advertisedChunkSize)) {
       await discardBody(startResponse);
       throw new Error(
@@ -160,6 +196,25 @@ export class RegistryClient {
     if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) {
       await discardBody(startResponse);
       throw new Error("Registry chunk size is outside supported bounds");
+    }
+    const minimumHeader = startResponse.headers.get("oci-chunk-min-length");
+    if (
+      minimumHeader !== null &&
+      (!/^[1-9][0-9]*$/u.test(minimumHeader) ||
+        !Number.isSafeInteger(Number(minimumHeader)))
+    ) {
+      await discardBody(startResponse);
+      throw new Error(
+        "Registry returned a malformed oci-chunk-min-length header",
+      );
+    }
+    if (
+      minimumHeader !== null &&
+      size > chunkSize &&
+      chunkSize < Number(minimumHeader)
+    ) {
+      await discardBody(startResponse);
+      throw new Error("Configured chunk size is below the registry minimum");
     }
     onProgress?.({ chunkSize, totalBytes: size, uploadedBytes: 0 });
     let location = this.#uploadLocation(
@@ -183,7 +238,7 @@ export class RegistryClient {
           range: `0-${end}`,
         }),
         method: "PATCH",
-      });
+      }).finally(() => stream.destroy());
       if (!patchResponse.ok) {
         const status = patchResponse.status;
         await discardBody(patchResponse);

@@ -50,13 +50,22 @@ describe("interrupted upload cleanup", () => {
     process.env.REGPUSH_TEST_FIXTURE = fixtureTar;
     try {
       const registryHost = new URL(registry.origin).host;
+      const warnings: string[] = [];
       await assert.rejects(
         runRegpush({
           cleanup: true,
           dockerPath,
           image: `${registryHost}/team/nested/app:test`,
           insecureHttp: true,
-          logger: { error() {}, info() {}, warning() {} },
+          logger: {
+            error() {},
+            info() {},
+            warning(message) {
+              warnings.push(message);
+            },
+          },
+          maxChunkBytes: 10 * 1024 * 1024,
+          uploadConcurrency: 1,
           maxRetries: 2,
           maxTemporaryBytes: 10 * 1024 * 1024,
           password: registry.password,
@@ -65,7 +74,14 @@ describe("interrupted upload cleanup", () => {
           temporaryBaseDirectory: workspaceBase,
           username: registry.username,
         }),
+        /Registry PATCH request failed.*(?:EPIPE|ECONNRESET|UND_ERR_SOCKET)/u,
       );
+      assert.ok(
+        warnings.some((message) =>
+          /PATCH.*(?:EPIPE|ECONNRESET|UND_ERR_SOCKET).*retrying/u.test(message),
+        ),
+      );
+      assert.equal(registry.state.manifests.size, 0);
       assert.deepEqual(await readdir(workspaceBase), []);
       assert.equal(
         registry.state.requests.filter(

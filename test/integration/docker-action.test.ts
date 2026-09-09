@@ -82,7 +82,9 @@ it("pushes a buildx --load image through the packaged CLI and cleans artifacts",
       {
         ...process.env,
         REGPUSH_PASSWORD: testPassword,
-        REGPUSH_REQUEST_TIMEOUT_MS: "5000",
+        REGPUSH_REQUEST_TIMEOUT_MS: "",
+        REGPUSH_MAX_CHUNK_BYTES: "",
+        REGPUSH_UPLOAD_CONCURRENCY: "",
         REGPUSH_USERNAME: testUsername,
         RUNNER_TEMP: workspaceBase,
       },
@@ -108,6 +110,7 @@ it("pushes a buildx --load image through the packaged CLI and cleans artifacts",
     assert.match(execution.output, /Checking local Docker image/u);
     assert.match(execution.output, /Preparing image artifacts/u);
     assert.match(execution.output, /Prepared [0-9]+ layers?/u);
+    assert.match(execution.output, /up to 1 concurrent/u);
     assert.match(execution.output, /Layer 1\/[0-9]+: checking registry/u);
     assert.match(execution.output, /Layer 1\/[0-9]+: uploading/u);
     assert.match(execution.output, /Layer 1\/[0-9]+: .*100%/u);
@@ -126,6 +129,37 @@ it("pushes a buildx --load image through the packaged CLI and cleans artifacts",
     assert.ok(
       manifest.layers.every((layer) => registry.state.blobs.has(layer.digest)),
     );
+    assert.deepEqual(await readdir(workspaceBase), []);
+
+    // Exercise the shipped GitHub Action entry point without upload tuning.
+    registry.state.blobs.clear();
+    registry.state.manifests.clear();
+    const actionExecution = await run(
+      process.execPath,
+      [path.resolve("dist/index.js")],
+      {
+        ...process.env,
+        INPUT_IMAGE: image,
+        INPUT_USERNAME: testUsername,
+        INPUT_PASSWORD: testPassword,
+        INPUT_CLEANUP: "true",
+        "INPUT_INSECURE-HTTP": "true",
+        REGPUSH_REQUEST_TIMEOUT_MS: "",
+        REGPUSH_MAX_CHUNK_BYTES: "",
+        REGPUSH_UPLOAD_CONCURRENCY: "",
+        RUNNER_TEMP: workspaceBase,
+      },
+    );
+    assert.equal(
+      actionExecution.code,
+      0,
+      actionExecution.output
+        .replaceAll(testUsername, "***")
+        .replaceAll(testPassword, "***"),
+    );
+    assert.match(actionExecution.output, /up to 1 concurrent/u);
+    assert.match(actionExecution.output, /Success:/u);
+    assert.ok(registry.state.manifests.has("integration/nested/app:test"));
     assert.deepEqual(await readdir(workspaceBase), []);
 
     const cacheBase = path.join(base, "cache");

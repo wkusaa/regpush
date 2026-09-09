@@ -27,6 +27,14 @@ async function main(): Promise<void> {
       process.env.REGPUSH_PASSWORD ?? process.env.PASSWORD_REGISTRY ?? "";
     await runRegpush({
       cleanup: args.cleanup,
+      maxChunkBytes: optionalInteger(
+        process.env.REGPUSH_MAX_CHUNK_BYTES,
+        "REGPUSH_MAX_CHUNK_BYTES",
+      ),
+      uploadConcurrency: optionalInteger(
+        process.env.REGPUSH_UPLOAD_CONCURRENCY,
+        "REGPUSH_UPLOAD_CONCURRENCY",
+      ),
       image: args.image,
       insecureHttp: args.insecureHttp,
       maxRetries: optionalInteger(

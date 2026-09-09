@@ -9,8 +9,74 @@ import { RegistryClient } from "../../src/registry.ts";
 import { startMockRegistry } from "../fixtures/mock-registry.ts";
 
 describe("chunked registry upload", () => {
+  it("defaults to 10 MiB chunks when the registry permits larger requests", async () => {
+    const registry = await startMockRegistry({
+      chunkSize: 100 * 1024 * 1024,
+      minChunkSize: 5 * 1024 * 1024,
+    });
+    const directory = await mkdtemp(
+      path.join(tmpdir(), "regpush-default-chunks-"),
+    );
+    const blob = Buffer.alloc(10 * 1024 * 1024 + 1, 42);
+    const filePath = path.join(directory, "blob");
+    await writeFile(filePath, blob);
+    const digest = `sha256:${createHash("sha256").update(blob).digest("hex")}`;
+    try {
+      const client = new RegistryClient({
+        baseUrl: registry.origin,
+        repository: "team/app",
+        username: registry.username,
+        password: registry.password,
+        timeoutMs: 5000,
+      });
+      assert.equal(
+        await client.uploadBlob(digest, filePath, blob.length),
+        "uploaded",
+      );
+      assert.deepEqual(
+        registry.state.patches.map((patch) => patch.length),
+        [10 * 1024 * 1024, 1],
+      );
+      assert.deepEqual(registry.state.blobs.get(digest), blob);
+    } finally {
+      await registry.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("reports nested transport codes without exposing transport messages", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => {
+      throw new TypeError("fetch failed", {
+        cause: Object.assign(new Error("secret transport detail"), {
+          code: "EPIPE",
+        }),
+      });
+    };
+    try {
+      const client = new RegistryClient({
+        baseUrl: "https://registry.invalid",
+        repository: "team/app",
+        username: "test-user",
+        password: "test-password",
+        timeoutMs: 5000,
+      });
+      await assert.rejects(
+        client.uploadManifest("latest", {}, "application/json"),
+        (error: Error) => {
+          assert.ok(error instanceof TypeError);
+          assert.match(error.message, /PUT.*EPIPE/u);
+          assert.doesNotMatch(error.message, /secret transport detail/u);
+          return true;
+        },
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("honors chunk boundaries and completes the blob by digest", async () => {
-    const registry = await startMockRegistry({ chunkSize: 4 });
+    const registry = await startMockRegistry({ chunkSize: 8 });
     const temporaryDirectory = await mkdtemp(
       path.join(tmpdir(), "regpush-test-"),
     );
@@ -24,6 +90,7 @@ describe("chunked registry upload", () => {
         baseUrl: registry.origin,
         password: registry.password,
         repository: "team/nested/app",
+        maxChunkBytes: 4,
         timeoutMs: 5_000,
         username: registry.username,
       });
@@ -55,6 +122,30 @@ describe("chunked registry upload", () => {
     } finally {
       await registry.close();
       await rm(temporaryDirectory, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects a chunk cap below the advertised minimum before sending data", async () => {
+    const registry = await startMockRegistry({ chunkSize: 8, minChunkSize: 5 });
+    try {
+      const client = new RegistryClient({
+        baseUrl: registry.origin,
+        repository: "team/app",
+        username: registry.username,
+        password: registry.password,
+        timeoutMs: 5000,
+        maxChunkBytes: 4,
+      });
+      await assert.rejects(
+        client.uploadBlob(`sha256:${"a".repeat(64)}`, "unused", 10),
+        /below the registry minimum/u,
+      );
+      assert.equal(
+        registry.state.requests.some((request) => request.method === "PATCH"),
+        false,
+      );
+    } finally {
+      await registry.close();
     }
   });
 
