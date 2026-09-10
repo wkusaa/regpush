@@ -172,6 +172,18 @@ Do not run secret-bearing workflows on untrusted pull-request code. The reposito
 
 Immutable releases use full semantic-version tags such as `v1.0.4`. Pin the full version for predictable behavior. A moving major-version tag is updated only after its corresponding immutable release has been verified.
 
+To automatically use the latest stable release:
+
+```yaml
+uses: wkusaa/regpush@latest
+```
+
+The `Update latest tag` workflow moves this tag when a stable GitHub release is
+published, provided its commit has a successful CI run. It ignores prereleases
+and can also be run manually after CI completes. It follows GitHub's latest
+stable release, not unreleased commits on `main`. Existing version tags remain
+unchanged; `@latest` adopts future releases without a workflow edit.
+
 Source changes, the committed action bundle, and release tags are verified together in CI. Consumers should review release notes before adopting a new immutable version.
 
 ## License and attribution
