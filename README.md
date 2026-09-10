@@ -49,7 +49,7 @@ jobs:
         run: docker buildx build --load --tag "$IMAGE" .
 
       - name: Push image through the Worker
-        uses: wkusaa/regpush@v1.0.3
+        uses: wkusaa/regpush@v1.0.4
         with:
           image: ${{ env.IMAGE }}
           username: ${{ secrets.REGISTRY_USERNAME }}
@@ -170,7 +170,7 @@ Do not run secret-bearing workflows on untrusted pull-request code. The reposito
 
 ## Releases
 
-Immutable releases use full semantic-version tags such as `v1.0.3`. Pin the full version for predictable behavior. A moving major-version tag is updated only after its corresponding immutable release has been verified.
+Immutable releases use full semantic-version tags such as `v1.0.4`. Pin the full version for predictable behavior. A moving major-version tag is updated only after its corresponding immutable release has been verified.
 
 Source changes, the committed action bundle, and release tags are verified together in CI. Consumers should review release notes before adopting a new immutable version.
 
