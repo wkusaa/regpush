@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { chmod, readFile, rename, rm, stat } from "node:fs/promises";
+import { chmod, open, readFile, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
@@ -117,11 +117,32 @@ async function inspectArchive(
   return expandedBytes;
 }
 
+const GZIP_MAGIC = Buffer.from([0x1f, 0x8b]);
+const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
+
+// The containerd image store saves layers already compressed; only plain tars need gzip.
+async function readLayerMagic(sourcePath: string): Promise<Buffer> {
+  const handle = await open(sourcePath, "r");
+  try {
+    const magic = Buffer.alloc(4);
+    const { bytesRead } = await handle.read(magic, 0, magic.length, 0);
+    return magic.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
 async function compressLayer(
   sourcePath: string,
   outputPath: string,
   reserveBytes: (count: number) => void,
 ): Promise<BlobArtifact> {
+  const magic = await readLayerMagic(sourcePath);
+  if (magic.subarray(0, ZSTD_MAGIC.length).equals(ZSTD_MAGIC))
+    throw new Error("Docker save contains a zstd layer, which is unsupported");
+  const alreadyGzipped = magic
+    .subarray(0, GZIP_MAGIC.length)
+    .equals(GZIP_MAGIC);
   const partialPath = `${outputPath}.part`;
   await rm(partialPath, { force: true });
   const hasher = createHash("sha256");
@@ -140,12 +161,17 @@ async function compressLayer(
   });
 
   try {
-    await pipeline(
-      createReadStream(sourcePath),
-      createGzip({ finishFlush: zlibConstants.Z_FINISH, level: 9 }),
-      accounting,
-      createWriteStream(partialPath, { flags: "wx", mode: 0o600 }),
-    );
+    const output = createWriteStream(partialPath, { flags: "wx", mode: 0o600 });
+    if (alreadyGzipped) {
+      await pipeline(createReadStream(sourcePath), accounting, output);
+    } else {
+      await pipeline(
+        createReadStream(sourcePath),
+        createGzip({ finishFlush: zlibConstants.Z_FINISH, level: 9 }),
+        accounting,
+        output,
+      );
+    }
     await rename(partialPath, outputPath);
   } catch (error) {
     await rm(partialPath, { force: true });

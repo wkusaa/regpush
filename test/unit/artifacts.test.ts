@@ -9,7 +9,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { gunzip } from "node:zlib";
+import { gunzip, gzipSync } from "node:zlib";
 import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -178,6 +178,86 @@ describe("Docker image artifacts", () => {
       if (previousSaveMarker === undefined)
         delete process.env.REGPUSH_TEST_SAVE_MARKER;
       else process.env.REGPUSH_TEST_SAVE_MARKER = previousSaveMarker;
+      await workspace?.dispose();
+      await rm(base, { force: true, recursive: true });
+    }
+  });
+
+  it("passes already-gzipped layers through and rejects zstd layers", async () => {
+    const base = await mkdtemp(path.join(tmpdir(), "regpush-artifact-test-"));
+    const fixture = path.join(base, "fixture");
+    const bin = path.join(base, "bin");
+    const fixtureTar = path.join(base, "fixture.tar");
+    const imageId = `sha256:${"b".repeat(64)}`;
+    const gzippedLayer = gzipSync(Buffer.from("layer-tar-content"));
+    const zstdLayer = Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x00]);
+
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(fixture, { recursive: true });
+    await mkdir(bin, { recursive: true });
+    await writeFile(path.join(fixture, "config.json"), "{}\n");
+    await writeFile(path.join(fixture, "layer-gzip"), gzippedLayer);
+    await writeFile(path.join(fixture, "layer-zstd"), zstdLayer);
+
+    const dockerPath = path.join(bin, "docker");
+    await writeFile(
+      dockerPath,
+      `#!/bin/sh\nif [ "$2" = "inspect" ]; then printf '%s\\n' '${imageId}'; exit 0; fi\nif [ "$2" = "save" ]; then cp "$REGPUSH_TEST_FIXTURE" "$4"; exit 0; fi\nexit 1\n`,
+      { mode: 0o700 },
+    );
+    await chmod(dockerPath, 0o700);
+
+    const writeFixture = async (layer: string) => {
+      await writeFile(
+        path.join(fixture, "manifest.json"),
+        JSON.stringify([{ Config: "config.json", Layers: [layer] }]),
+      );
+      await rm(fixtureTar, { force: true });
+      await tar.c({ cwd: fixture, file: fixtureTar }, [
+        "config.json",
+        layer,
+        "manifest.json",
+      ]);
+    };
+
+    const previousFixture = process.env.REGPUSH_TEST_FIXTURE;
+    process.env.REGPUSH_TEST_FIXTURE = fixtureTar;
+    let workspace: ImageWorkspace | undefined;
+    try {
+      const docker = new DockerClient({ dockerPath, timeoutMs: 2_000 });
+      const prepare = async () => {
+        await workspace?.dispose();
+        workspace = await ImageWorkspace.create({
+          baseDirectory: base,
+          cleanup: true,
+          imageId,
+        });
+        return prepareImageArtifacts({
+          docker,
+          image: "registry.example/team/app:tag",
+          maxTemporaryBytes: 10 * 1024 * 1024,
+          workspace,
+        });
+      };
+
+      await writeFixture("layer-gzip");
+      const artifacts = await prepare();
+      assert.deepEqual(
+        await readFile(artifacts.layers[0]!.filePath),
+        gzippedLayer,
+      );
+      assert.equal(
+        artifacts.layers[0]!.digest,
+        `sha256:${createHash("sha256").update(gzippedLayer).digest("hex")}`,
+      );
+      assert.equal(artifacts.layers[0]!.size, gzippedLayer.length);
+
+      await writeFixture("layer-zstd");
+      await assert.rejects(prepare(), /zstd layer/u);
+    } finally {
+      if (previousFixture === undefined)
+        delete process.env.REGPUSH_TEST_FIXTURE;
+      else process.env.REGPUSH_TEST_FIXTURE = previousFixture;
       await workspace?.dispose();
       await rm(base, { force: true, recursive: true });
     }

@@ -6,7 +6,7 @@ import path from "node:path";
 import type { BlobArtifact, ImageArtifacts } from "./artifacts.ts";
 import type { ImageWorkspace } from "./workspace.ts";
 
-const CACHE_SCHEMA_VERSION = 1;
+const CACHE_SCHEMA_VERSION = 2;
 const MAX_CACHE_METADATA_BYTES = 1024 * 1024;
 const CACHE_METADATA_NAME = "artifacts-v1.json";
 
